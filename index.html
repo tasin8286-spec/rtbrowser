@@ -504,10 +504,10 @@ app.addEventListener('touchmove', e=>{
   if(e.touches[0]) moveCursorToMouse(e.touches[0].clientX,e.touches[0].clientY);
 }, {passive:true});
 app.addEventListener('click', e=>{
-  // clicks from real mouse/touch fall through naturally to elements underneath;
-  // we just also trigger our activation logic for consistency.
-  const el = e.target.closest('[data-act],.mrow,#bmlist li,.sw');
-  if(el) activate(el);
+  // #bmlist li is excluded here: bookmarks use their own tap/hold handler
+  // (addLongPress) so a plain click isn't double-fired.
+  const el = e.target.closest('[data-act],.mrow,.sw');
+  if(el && !el.closest('#bmlist')) activate(el);
 });
 
 /* ======================================================================
@@ -570,11 +570,18 @@ document.addEventListener('keyup', e=>{
    ACTIVATION (click/select handler for any [data-act] element)
    ====================================================================== */
 function activate(el){
-  const act = el.getAttribute('data-act');
+  // Address bar: Enter/select on it should focus it so the user can type.
+  if(el.id==='addr'){ el.focus(); return; }
+  // Bookmarks: Enter/select always OPENS the bookmark (matches what a tap does).
+  // Long-press (mouse/touch) is the only way into rename/move/delete, so keyboard
+  // users are never stuck unable to open a saved site.
   if(el.matches('#bmlist li')){
-    openBmOptions(parseInt(el.dataset.idx,10), el.dataset.kind);
+    const idx = parseInt(el.dataset.idx,10);
+    const url = el.dataset.kind==='default' ? DEFAULT_BOOKMARKS[idx].url : state.bookmarks[idx].url;
+    navigateTo(url);
     return;
   }
+  const act = el.getAttribute('data-act');
   if(!act) return;
   switch(act){
     case 'back': doBack(); break;
@@ -672,10 +679,12 @@ function navigateTo(url, pushHistory=true){
 
   clearTimeout(loadTimer);
   loadTimer = setTimeout(()=>{
-    // heuristic: if still loading after 6s, likely blocked/slow
-    if(state.loading) showError("PAGE TOOK TOO LONG",
-      "This may be blocked by the site's security policy, or your connection is slow.");
-  }, 6000);
+    // heuristic: if still loading after 4s, most likely the site is refusing
+    // to be framed (common for Google, YouTube, Facebook, GitHub, X, Reddit),
+    // not a slow connection.
+    if(state.loading) showError("UNABLE TO OPEN PAGE",
+      "This site likely blocks embedded browsing (many large sites do). Try Wikipedia or a direct video link instead.");
+  }, 4000);
 
   try{ frameEl.src = url; }catch(e){ showError("UNABLE TO OPEN PAGE","Invalid or unreachable address."); }
 
@@ -747,11 +756,7 @@ function logHistory(url){
 }
 
 addrEl.addEventListener('focus', ()=>{ addrEl.select(); });
-addrEl.addEventListener('keydown', e=>{ if(e.key==='Enter') navigateFromAddress(); });
 
-document.querySelectorAll('.tbtn[data-act]').forEach(b=>b.addEventListener('click',()=>activate(b)));
-document.getElementById('addbm').addEventListener('click', ()=>activate(document.getElementById('addbm')));
-document.getElementById('errscreen').querySelector('.btn').addEventListener('click', doBack);
 
 /* ======================================================================
    BOOKMARKS
@@ -770,9 +775,22 @@ function renderBookmarks(){
     const li=document.createElement('li');
     li.dataset.idx=i; li.dataset.kind='user';
     li.innerHTML=`<span class="ic">\u2606</span><span class="nm">${escapeHtml(b.name)}</span>`;
-    li.addEventListener('click',()=>navigateTo(b.url));
+    addLongPress(li, ()=>navigateTo(b.url), ()=>openBmOptions(i,'user'));
     ul.appendChild(li);
   });
+}
+// Short tap = onTap. Press-and-hold ~500ms = onHold (used for bookmark options).
+function addLongPress(el, onTap, onHold){
+  let timer=null, fired=false;
+  const start = ()=>{ fired=false; timer=setTimeout(()=>{ fired=true; onHold(); }, 500); };
+  const cancel = ()=>{ clearTimeout(timer); };
+  const end = ()=>{ clearTimeout(timer); if(!fired) onTap(); };
+  el.addEventListener('mousedown', start);
+  el.addEventListener('mouseup', end);
+  el.addEventListener('mouseleave', cancel);
+  el.addEventListener('touchstart', e=>{ start(); }, {passive:true});
+  el.addEventListener('touchend', e=>{ e.preventDefault(); end(); });
+  el.addEventListener('touchcancel', cancel);
 }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
@@ -885,7 +903,7 @@ document.getElementById('setHome').addEventListener('change', e=>{
   settings.home = e.target.value.trim() || HOME_URL; saveSettings();
 });
 
-document.querySelectorAll('.sw').forEach(sw=>sw.addEventListener('click',()=>activate(sw)));
+
 
 /* ======================================================================
    VIDEO PLAYER
@@ -930,7 +948,7 @@ document.addEventListener('keydown', e=>{
   else if(e.key==='m'||e.key==='M'){ videoToggleMute(); }
   else if(e.key==='f'||e.key==='F'){ videoFullscreen(); }
 });
-document.querySelectorAll('#vidControls .vbtn').forEach(b=>b.addEventListener('click',()=>activate(b)));
+
 
 /* ======================================================================
    INITIALIZATION
