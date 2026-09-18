@@ -210,6 +210,7 @@ html,body{
     <div id="errscreen">
       <h2 id="errTitle">UNABLE TO OPEN PAGE</h2>
       <p id="errMsg">This site may not allow embedded browsing.</p>
+      <div class="btn" data-act="openExternal" style="margin-bottom:6px;">OPEN IN BROWSER</div>
       <div class="btn" data-act="errback">BACK</div>
     </div>
   </div>
@@ -599,6 +600,7 @@ function activate(el){
     case 'about': setStatus("Feature-phone browser UI"); break;
     case 'savebm': saveBookmarkForm(); break;
     case 'errback': doBack(); break;
+    case 'openExternal': window.open(state.currentUrl, '_blank'); break;
     case 'bmOpen': bmOptOpen(); break;
     case 'bmEdit': bmOptEdit(); break;
     case 'bmMoveUp': bmMove(-1); break;
@@ -687,7 +689,7 @@ function navigateTo(url, pushHistory=true){
     // GitHub, X, Reddit), not a slow connection. myToken guards against a
     // stale timer from an earlier navigation firing after the user moved on.
     if(state.loading && loadToken===myToken) showError("UNABLE TO OPEN PAGE",
-      "This site likely blocks embedded browsing (many large sites do). Try Wikipedia or a direct video link instead.");
+      "This site blocks embedded browsing (common for Google, YouTube, Facebook, GitHub, X, Reddit). Use Open in Browser below to visit it directly.");
   }, 8000);
 
   try{ frameEl.src = url; }catch(e){ showError("UNABLE TO OPEN PAGE","Invalid or unreachable address."); }
