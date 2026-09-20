@@ -155,7 +155,7 @@
             background-repeat: no-repeat;
             background-size: contain;
             filter: drop-shadow(0 1px 2px rgba(0,0,0,0.45));
-            transition: opacity 0.15s ease, transform 0.02s linear;
+            transition: opacity 0.15s ease;
             opacity: 0;
         }
 
@@ -213,9 +213,9 @@
             <div class="icon-circle"><img src="https://www.google.com/s2/favicons?sz=64&domain=youtube.com" alt="YT"></div>
             <span class="icon-label">YouTube</span>
         </a>
-        <a href="https://duck.ai/" class="icon-box">
-            <div class="icon-circle"><img src="https://www.google.com/s2/favicons?sz=64&domain=duck.ai" alt="W"></div>
-            <span class="icon-label">Duck Ai</span>
+        <a href="https://cinehd.vc/" class="icon-box">
+            <div class="icon-circle"><img src="https://www.google.com/s2/favicons?sz=64&domain=cinehd.vc" alt="C"></div>
+            <span class="icon-label">CineHD</span>
         </a>
         <a href="https://chatgpt.com" class="icon-box">
             <div class="icon-circle"><img src="https://www.google.com/s2/favicons?sz=64&domain=chatgpt.com" alt="Gpt"></div>
@@ -281,13 +281,47 @@
         var active = false;          // key-driven cursor currently in control
         var raf = null;
         var lastHover = null;
+        var lastTime = null;
 
-        var SPEED = 14;              // px per frame at full press
+        var BASE_SPEED = 480;        // px per second at full press
+        var MAX_SPEED = 780;         // px per second cap after ramping up
+        var RAMP_TIME = 0.35;        // seconds held before reaching MAX_SPEED
         var pressed = { up: false, down: false, left: false, right: false };
-        var speedMultiplier = 1;
-        var accelTimer = null;
+        var heldTime = 0;
 
         function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+        // Direct hit-testing against the real interactive elements, instead of
+        // elementFromPoint (which some lightweight browser engines get wrong
+        // when a fixed, high z-index cursor overlay sits on top of the page).
+        var interactiveEls = null;
+        var HIT_PAD = 6; // px of extra tolerance around each target, easier to land on with a d-pad
+
+        function getInteractiveEls() {
+            if (!interactiveEls) {
+                interactiveEls = Array.prototype.slice.call(
+                    document.querySelectorAll('a, button, input')
+                );
+            }
+            return interactiveEls;
+        }
+
+        function findTargetAt(px, py) {
+            var els = getInteractiveEls();
+            var best = null;
+            var bestArea = Infinity;
+            for (var i = 0; i < els.length; i++) {
+                var r = els[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                if (px >= r.left - HIT_PAD && px <= r.right + HIT_PAD &&
+                    py >= r.top - HIT_PAD && py <= r.bottom + HIT_PAD) {
+                    var area = r.width * r.height;
+                    // prefer the smallest matching element (most specific target)
+                    if (area < bestArea) { best = els[i]; bestArea = area; }
+                }
+            }
+            return best;
+        }
 
         function setCursorPos(px, py) {
             x = clamp(px, 4, window.innerWidth - 4);
@@ -297,20 +331,11 @@
         }
 
         function updateHover() {
-            var el = document.elementFromPoint(x, y);
-            // walk up to the nearest clickable/link ancestor
-            var clickable = el;
-            while (clickable && clickable !== document.body &&
-                   !(clickable.tagName === 'A' || clickable.tagName === 'BUTTON' ||
-                     clickable.tagName === 'INPUT')) {
-                clickable = clickable.parentElement;
-            }
-            if (clickable === document.body) clickable = null;
-
-            if (clickable !== lastHover) {
+            var target = findTargetAt(x, y);
+            if (target !== lastHover) {
                 if (lastHover) lastHover.classList.remove('cursor-hover');
-                if (clickable) clickable.classList.add('cursor-hover');
-                lastHover = clickable;
+                if (target) target.classList.add('cursor-hover');
+                lastHover = target;
             }
         }
 
@@ -323,7 +348,13 @@
             }
         }
 
-        function step() {
+        function step(now) {
+            if (lastTime === null) lastTime = now;
+            var dt = (now - lastTime) / 1000;
+            // guard against huge jumps (tab backgrounded, etc.)
+            dt = Math.min(dt, 0.05);
+            lastTime = now;
+
             var dx = 0, dy = 0;
             if (pressed.up) dy -= 1;
             if (pressed.down) dy += 1;
@@ -337,12 +368,13 @@
             }
 
             if (dx !== 0 || dy !== 0) {
-                setCursorPos(x + dx * SPEED * speedMultiplier, y + dy * SPEED * speedMultiplier);
-                // gently ramp up speed the longer a direction is held, for a smooth feel
-                speedMultiplier = Math.min(speedMultiplier + 0.04, 2.2);
+                heldTime = Math.min(heldTime + dt, RAMP_TIME);
+                var speed = BASE_SPEED + (MAX_SPEED - BASE_SPEED) * (heldTime / RAMP_TIME);
+                setCursorPos(x + dx * speed * dt, y + dy * speed * dt);
                 raf = requestAnimationFrame(step);
             } else {
-                speedMultiplier = 1;
+                heldTime = 0;
+                lastTime = null;
                 raf = null;
             }
         }
@@ -355,23 +387,26 @@
             cursorEl.classList.add('clicking');
             setTimeout(function () { cursorEl.classList.remove('clicking'); }, 120);
 
-            var el = lastHover || document.elementFromPoint(x, y);
+            var el = lastHover || findTargetAt(x, y);
             if (!el) return;
 
             if (el.tagName === 'INPUT') {
                 el.focus();
                 return;
             }
-            // simulate a real, trustworthy-feeling click sequence
-            ['mousedown', 'mouseup', 'click'].forEach(function (type) {
-                el.dispatchEvent(new MouseEvent(type, {
-                    bubbles: true, cancelable: true, clientX: x, clientY: y
-                }));
-            });
+            // el.click() is the standard DOM way to trigger a real activation:
+            // it reliably follows <a> links and submits forms via <button>,
+            // unlike manually dispatched mouse events which some engines ignore.
+            el.click();
         }
 
         window.addEventListener('keydown', function (e) {
             var key = e.key;
+            // fallback for older/limited engines that only send keyCode
+            if (key === undefined) {
+                var codeMap = { 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown', 13: 'Enter', 32: ' ' };
+                key = codeMap[e.keyCode] || key;
+            }
             var handled = true;
 
             switch (key) {
@@ -394,7 +429,12 @@
         }, { passive: false });
 
         window.addEventListener('keyup', function (e) {
-            switch (e.key) {
+            var key = e.key;
+            if (key === undefined) {
+                var codeMap2 = { 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' };
+                key = codeMap2[e.keyCode] || key;
+            }
+            switch (key) {
                 case 'ArrowUp': pressed.up = false; break;
                 case 'ArrowDown': pressed.down = false; break;
                 case 'ArrowLeft': pressed.left = false; break;
@@ -419,6 +459,64 @@
 
         window.addEventListener('resize', function () {
             setCursorPos(x, y);
+        });
+    })();
+    </script>
+
+    <script>
+    /* =========================================================
+       Long-press "5" (numeric center key) to play/pause video —
+       for when the cursor can't reach a video's own play button.
+       Works on THIS page only (a page's script can never reach
+       into other sites' pages — see the bookmarklet below for
+       a version that works on any site you're browsing).
+       ========================================================= */
+    (function () {
+        var LONG_PRESS_MS = 550;
+        var timer = null;
+        var searchInput = document.getElementById('searchInput');
+
+        function isFiveKey(e) {
+            return e.key === '5' || e.keyCode === 53;
+        }
+
+        function toggleVideoPlayback() {
+            var videos = document.getElementsByTagName('video');
+            if (!videos.length) return;
+
+            // pick the largest visible video on the page — most likely the real player
+            var best = null, bestArea = 0;
+            for (var i = 0; i < videos.length; i++) {
+                var r = videos[i].getBoundingClientRect();
+                var area = r.width * r.height;
+                if (area > bestArea) { bestArea = area; best = videos[i]; }
+            }
+            if (!best) best = videos[0];
+
+            if (best.paused || best.ended) {
+                var p = best.play();
+                if (p && p.catch) p.catch(function () {});
+            } else {
+                best.pause();
+            }
+        }
+
+        window.addEventListener('keydown', function (e) {
+            // don't hijack "5" while the person is typing in the search box
+            if (document.activeElement === searchInput) return;
+            if (isFiveKey(e) && !e.repeat && timer === null) {
+                timer = setTimeout(function () {
+                    timer = null;
+                    toggleVideoPlayback();
+                }, LONG_PRESS_MS);
+            }
+        });
+
+        window.addEventListener('keyup', function (e) {
+            if (isFiveKey(e) && timer !== null) {
+                clearTimeout(timer);
+                timer = null;
+            }
         });
     })();
     </script>
